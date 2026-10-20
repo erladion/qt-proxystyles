@@ -110,8 +110,13 @@ minor version) as the plugin.
     | `Highlight` / `HighlightedText` | Accent: default buttons, checked controls, focus, selection |
     | `ToolTipBase` / `ToolTipText` | Tooltips |
 
-    Borders, glyphs, scroll bars, sliders, progress bars, tab pages, group boxes and hover
-    highlights always keep the Windows colors.
+    The remaining greys (borders, glyphs, scroll bars, sliders, progress tracks, tab pages, group
+    boxes, hover highlights) follow `Window` and `WindowText`. With the style's own colors they're
+    the exact Windows greys. With other colors, each grey keeps its place between window and text,
+    so a whole custom palette, dark or light, re-tints the style consistently. Accent tints and the
+    green progress bar keep their hue.
+  - Palettes can change at any time, including the whole application palette. Tooltips follow the
+    application palette too.
 - **System theme.** On Qt 6.5+, `Theme::System` follows the OS color scheme and updates live when it
   changes. On older Qt versions it picks light or dark once, from the palette in use at startup.
 - **Menus and tooltips.** `ModernStyle` and `Windows10Style` keep them square. `WinUIStyle` rounds

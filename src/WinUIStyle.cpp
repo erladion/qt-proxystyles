@@ -8,6 +8,7 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QFontDatabase>
+#include <QIconEngine>
 #include <QFrame>
 #include <QGroupBox>
 #include <QLineEdit>
@@ -191,10 +192,6 @@ const Tokens& tokensFor(bool dark) {
   return dark ? darkTokens : light;
 }
 
-const Tokens& tokensFor(const QStyleOption* option) {
-  return tokensFor(isDarkPalette(option->palette));
-}
-
 QColor defaultAccent() {
   return QColor(0x00, 0x78, 0xD4);
 }
@@ -348,25 +345,6 @@ QRect tabContentRect(const QStyleOptionTab* tab) {
   }
 }
 
-QIcon clearButtonIcon(const QColor& color) {
-  QIcon icon;
-  for (int size : {16, 32}) {
-    QPixmap pixmap(size, size);
-    pixmap.fill(Qt::transparent);
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    const qreal scale = size / 16.0;
-    QPen pen(color, 1.2 * scale);
-    pen.setCapStyle(Qt::RoundCap);
-    painter.setPen(pen);
-    painter.drawLine(QPointF(5, 5) * scale, QPointF(11, 11) * scale);
-    painter.drawLine(QPointF(11, 5) * scale, QPointF(5, 11) * scale);
-    painter.end();
-    icon.addPixmap(pixmap);
-  }
-  return icon;
-}
-
 bool wantsHover(const QWidget* widget) {
   return qobject_cast<const QAbstractButton*>(widget) || qobject_cast<const QComboBox*>(widget) ||
          qobject_cast<const QAbstractSpinBox*>(widget) || qobject_cast<const QAbstractSlider*>(widget) ||
@@ -491,7 +469,6 @@ void WinUIStyle::applyPalette(bool accentChanged) {
   const QPalette palette = mergeCustomRoles(next, m_appliedPalette, QApplication::palette(), accentChanged);
   m_appliedPalette = next;
   QApplication::setPalette(palette);
-  QToolTip::setPalette(palette);
 }
 
 void WinUIStyle::scheduleAnimationFrame(const QWidget* widget) const {
@@ -597,14 +574,119 @@ QPalette buildPalette(bool dark, const QColor& baseAccent) {
   return palette;
 }
 
+const QPalette& basePalette(bool dark) {
+  static const QPalette light = buildPalette(false, defaultAccent());
+  static const QPalette darkPalette = buildPalette(true, defaultAccent());
+  return dark ? darkPalette : light;
+}
+
 // The style's own palette per theme: the baseline for telling which roles the
 // application or a widget overrides. Accent roles aren't compared, so the default
 // accent stands in for any.
 const QPalette& basePalette(const QStyleOption* option) {
-  static const QPalette light = buildPalette(false, defaultAccent());
-  static const QPalette dark = buildPalette(true, defaultAccent());
-  return isDarkPalette(option->palette) ? dark : light;
+  return basePalette(isDarkPalette(option->palette));
 }
+
+// Tokens for a palette: the theme's set, with its greys re-tinted when the palette has other
+// window and text colors. Caches the last set, as one widget tree rarely mixes them.
+const Tokens& tokensFor(const QPalette& palette) {
+  static Tokens cached;
+  static bool hasCache = false;
+  static bool cachedDark = false;
+  static QRgb cachedWindow = 0;
+  static QRgb cachedText = 0;
+  const bool dark = isDarkPalette(palette);
+  const QPalette& standard = basePalette(dark);
+  if (hasStandardNeutrals(palette, standard)) {
+    return tokensFor(dark);
+  }
+  const QRgb window = palette.color(QPalette::Active, QPalette::Window).rgba();
+  const QRgb text = palette.color(QPalette::Active, QPalette::WindowText).rgba();
+  if (hasCache && cachedDark == dark && cachedWindow == window && cachedText == text) {
+    return cached;
+  }
+  cached = tokensFor(dark);
+  // Text on the accent follows HighlightedText instead, see textOnAccent()
+  static QColor Tokens::*const neutrals[] = {
+      &Tokens::m_textPrimary,
+      &Tokens::m_textSecondary,
+      &Tokens::m_textTertiary,
+      &Tokens::m_textDisabled,
+      &Tokens::m_controlFill,
+      &Tokens::m_controlFillSecondary,
+      &Tokens::m_controlFillTertiary,
+      &Tokens::m_controlFillDisabled,
+      &Tokens::m_controlFillInputActive,
+      &Tokens::m_controlStroke,
+      &Tokens::m_controlStrokeSecondary,
+      &Tokens::m_controlStrongStroke,
+      &Tokens::m_controlStrongStrokeDisabled,
+      &Tokens::m_controlAltFillSecondary,
+      &Tokens::m_controlAltFillTertiary,
+      &Tokens::m_controlAltFillQuarternary,
+      &Tokens::m_controlStrongFill,
+      &Tokens::m_controlStrongFillDisabled,
+      &Tokens::m_controlSolidFill,
+      &Tokens::m_subtleFillSecondary,
+      &Tokens::m_subtleFillTertiary,
+      &Tokens::m_divider,
+      &Tokens::m_cardFill,
+      &Tokens::m_cardStroke,
+      &Tokens::m_solidBackgroundTertiary,
+      &Tokens::m_flyoutFill,
+      &Tokens::m_flyoutStroke,
+      &Tokens::m_focusOuter,
+      &Tokens::m_focusInner,
+      &Tokens::m_accentDisabled,
+  };
+  for (QColor Tokens::*neutral : neutrals) {
+    cached.*neutral = retint(cached.*neutral, standard, palette);
+  }
+  hasCache = true;
+  cachedDark = dark;
+  cachedWindow = window;
+  cachedText = text;
+  return cached;
+}
+
+const Tokens& tokensFor(const QStyleOption* option) {
+  return tokensFor(option->palette);
+}
+
+QColor textOnAccent(const QStyleOption* option) {
+  return overriddenOr(option, QPalette::HighlightedText, basePalette(option), tokensFor(option).m_textOnAccent);
+}
+
+// Draws the line edit clear glyph at paint time, so it follows palette changes
+class ClearIconEngine : public QIconEngine {
+public:
+  void paint(QPainter* painter, const QRect& rect, QIcon::Mode mode, QIcon::State state) override {
+    Q_UNUSED(mode)
+    Q_UNUSED(state)
+    const qreal scale = rect.width() / 16.0;
+    const QPointF origin = rect.topLeft();
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(tokensFor(QGuiApplication::palette()).m_textSecondary, 1.2 * scale);
+    pen.setCapStyle(Qt::RoundCap);
+    painter->setPen(pen);
+    painter->drawLine(origin + QPointF(5, 5) * scale, origin + QPointF(11, 11) * scale);
+    painter->drawLine(origin + QPointF(11, 5) * scale, origin + QPointF(5, 11) * scale);
+    painter->restore();
+  }
+
+  QPixmap pixmap(const QSize& size, QIcon::Mode mode, QIcon::State state) override {
+    QPixmap result(size);
+    result.fill(Qt::transparent);
+    QPainter painter(&result);
+    paint(&painter, QRect(QPoint(0, 0), size), mode, state);
+    return result;
+  }
+
+  QIconEngine* clone() const override {
+    return new ClearIconEngine;
+  }
+};
 
 } // namespace
 
@@ -619,7 +701,21 @@ void WinUIStyle::polish(QPalette& palette) {
 
 void WinUIStyle::polish(QApplication* application) {
   QProxyStyle::polish(application);
-  QToolTip::setPalette(standardPalette());
+  // Tooltips keep a palette of their own; follow the application's from now on
+  QToolTip::setPalette(QApplication::palette());
+  application->installEventFilter(this);
+}
+
+void WinUIStyle::unpolish(QApplication* application) {
+  application->removeEventFilter(this);
+  QProxyStyle::unpolish(application);
+}
+
+bool WinUIStyle::eventFilter(QObject* watched, QEvent* event) {
+  if (event->type() == QEvent::ApplicationPaletteChange && watched == qApp) {
+    QToolTip::setPalette(QApplication::palette());
+  }
+  return QProxyStyle::eventFilter(watched, event);
 }
 
 void WinUIStyle::polish(QWidget* widget) {
@@ -973,9 +1069,10 @@ void WinUIStyle::drawCheckIndicator(const QStyleOption* option, QPainter* painte
   if (checked || partial) {
     const QColor fill = enabled ? accentFill(option, hovered, pressed) : tokens.m_accentDisabled;
     fillRoundedRect(painter, box, radius, fill);
+    const QColor onAccent = textOnAccent(option);
     QColor glyph = tokens.m_textOnAccentDisabled;
     if (enabled) {
-      glyph = pressed ? tokens.m_textOnAccentSecondary : tokens.m_textOnAccent;
+      glyph = pressed ? withAlpha(onAccent, onAccent.alphaF() * 0.7) : onAccent;
     }
     if (isRadio) {
       // The inner dot grows on hover and shrinks while pressed
@@ -986,7 +1083,7 @@ void WinUIStyle::drawCheckIndicator(const QStyleOption* option, QPainter* painte
         dot = size * 0.7;
       }
       const QRectF dotRect(box.center().x() - dot / 2.0, box.center().y() - dot / 2.0, dot, dot);
-      fillRoundedRect(painter, dotRect, dot / 2.0, enabled ? tokens.m_textOnAccent : tokens.m_textOnAccentDisabled);
+      fillRoundedRect(painter, dotRect, dot / 2.0, enabled ? onAccent : tokens.m_textOnAccentDisabled);
     } else if (partial && !checked) {
       painter->save();
       painter->setRenderHint(QPainter::Antialiasing, true);
@@ -1097,7 +1194,7 @@ void WinUIStyle::drawControl(ControlElement element, const QStyleOption* option,
           const bool onAccent = (button->state & State_Enabled) &&
                                 ((button->features & QStyleOptionButton::DefaultButton) || (button->state & State_On));
           drawChevron(painter, visualRect(button->direction, button->rect, arrowRect), Qt::DownArrow,
-                      onAccent ? tokens.m_textOnAccent : tokens.m_textSecondary, 9.0, 1.2);
+                      onAccent ? textOnAccent(button) : tokens.m_textSecondary, 9.0, 1.2);
         }
         return;
       }
@@ -1131,7 +1228,7 @@ void WinUIStyle::drawControl(ControlElement element, const QStyleOption* option,
       if (const QStyleOptionToolButton* button = qstyleoption_cast<const QStyleOptionToolButton*>(option)) {
         if ((button->state & State_On) && (button->state & State_Enabled)) {
           QStyleOptionToolButton copy(*button);
-          copy.palette.setColor(QPalette::ButtonText, tokens.m_textOnAccent);
+          copy.palette.setColor(QPalette::ButtonText, textOnAccent(button));
           QProxyStyle::drawControl(element, &copy, painter, widget);
           return;
         }
@@ -2241,13 +2338,7 @@ int WinUIStyle::styleHint(StyleHint hint, const QStyleOption* option, const QWid
 
 QIcon WinUIStyle::standardIcon(StandardPixmap pixmapType, const QStyleOption* option, const QWidget* widget) const {
   if (pixmapType == SP_LineEditClearButton) {
-    QPalette palette = QGuiApplication::palette();
-    if (widget) {
-      palette = widget->palette();
-    } else if (option) {
-      palette = option->palette;
-    }
-    return clearButtonIcon(tokensFor(isDarkPalette(palette)).m_textSecondary);
+    return QIcon(new ClearIconEngine);
   }
   return QProxyStyle::standardIcon(pixmapType, option, widget);
 }

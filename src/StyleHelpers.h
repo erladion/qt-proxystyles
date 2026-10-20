@@ -71,6 +71,41 @@ inline QColor overriddenOr(const QStyleOption* option, QPalette::ColorRole role,
   return color.isValid() ? color : fallback;
 }
 
+// Whether actual keeps the window and text colors of a style's own palette. Compares the
+// Active group: a disabled widget's palette reports its disabled text color by default.
+inline bool hasStandardNeutrals(const QPalette& actual, const QPalette& standard) {
+  return actual.color(QPalette::Active, QPalette::Window).rgba() ==
+             standard.color(QPalette::Active, QPalette::Window).rgba() &&
+         actual.color(QPalette::Active, QPalette::WindowText).rgba() ==
+             standard.color(QPalette::Active, QPalette::WindowText).rgba();
+}
+
+/*
+  Moves a grey picked for a style's own palette (standard) into another palette (actual).
+  The grey keeps its relative position between the window and text colors, so contrast
+  steps survive and the result takes on the new palette's tint. Colored values, such as
+  accent tints, are returned unchanged; alpha is kept.
+*/
+inline QColor retint(const QColor& color, const QPalette& standard, const QPalette& actual) {
+  const QColor hsv = color.toHsv();
+  if (hsv.hsvSaturationF() > 0.02) {
+    return color;
+  }
+  const QColor fromWindow = standard.color(QPalette::Active, QPalette::Window);
+  const int fromWindowGray = qGray(fromWindow.rgb());
+  const int span = qGray(standard.color(QPalette::Active, QPalette::WindowText).rgb()) - fromWindowGray;
+  if (span == 0) {
+    return color;
+  }
+  // Can fall slightly outside 0..1, for greys lighter than the window in a light theme
+  const qreal amount = qreal(qGray(color.rgb()) - fromWindowGray) / span;
+  const QColor toWindow = actual.color(QPalette::Active, QPalette::Window);
+  const QColor toText = actual.color(QPalette::Active, QPalette::WindowText);
+  const auto channel = [amount](qreal from, qreal to) { return qBound<qreal>(0.0, from + (to - from) * amount, 1.0); };
+  return QColor::fromRgbF(channel(toWindow.redF(), toText.redF()), channel(toWindow.greenF(), toText.greenF()),
+                          channel(toWindow.blueF(), toText.blueF()), color.alphaF());
+}
+
 inline bool isAccentRole(QPalette::ColorRole role) {
 #if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
   if (role == QPalette::Accent) {

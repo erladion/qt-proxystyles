@@ -190,7 +190,6 @@ void ModernStyle::applyPalette(bool accentChanged) {
   const QPalette palette = mergeCustomRoles(next, m_appliedPalette, QApplication::palette(), accentChanged);
   m_appliedPalette = next;
   QApplication::setPalette(palette);
-  QToolTip::setPalette(palette);
 }
 
 void ModernStyle::scheduleAnimationFrame(const QWidget* widget) const {
@@ -306,7 +305,21 @@ void ModernStyle::polish(QPalette& palette) {
 
 void ModernStyle::polish(QApplication* application) {
   QProxyStyle::polish(application);
-  QToolTip::setPalette(standardPalette());
+  // Tooltips keep a palette of their own; follow the application's from now on
+  QToolTip::setPalette(QApplication::palette());
+  application->installEventFilter(this);
+}
+
+void ModernStyle::unpolish(QApplication* application) {
+  application->removeEventFilter(this);
+  QProxyStyle::unpolish(application);
+}
+
+bool ModernStyle::eventFilter(QObject* watched, QEvent* event) {
+  if (event->type() == QEvent::ApplicationPaletteChange && watched == qApp) {
+    QToolTip::setPalette(QApplication::palette());
+  }
+  return QProxyStyle::eventFilter(watched, event);
 }
 
 void ModernStyle::polish(QWidget* widget) {

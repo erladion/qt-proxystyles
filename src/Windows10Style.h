@@ -42,8 +42,11 @@ public:
   using QProxyStyle::unpolish;
   void polish(QPalette& palette) override;
   void polish(QApplication* application) override;
+  void unpolish(QApplication* application) override;
   void polish(QWidget* widget) override;
   void unpolish(QWidget* widget) override;
+
+  bool eventFilter(QObject* watched, QEvent* event) override;
 
   void drawPrimitive(PrimitiveElement element, const QStyleOption* option, QPainter* painter,
                      const QWidget* widget = nullptr) const override;

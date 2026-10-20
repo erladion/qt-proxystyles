@@ -289,22 +289,6 @@ Colors makeDarkColors(const QColor& accent) {
   return colors;
 }
 
-// Colors depend on the palette's theme and accent; cache the last set, as one widget
-// tree rarely mixes them
-const Colors& colorsFor(const QStyleOption* option) {
-  static Colors cached;
-  static QRgb cachedAccent = 0;
-  static int cachedTheme = -1;
-  const bool dark = isDarkPalette(option->palette);
-  const QColor accent = option->palette.color(QPalette::Active, QPalette::Highlight);
-  if (cachedTheme != int(dark) || cachedAccent != accent.rgba()) {
-    cached = dark ? makeDarkColors(accent) : makeLightColors(accent);
-    cachedTheme = int(dark);
-    cachedAccent = accent.rgba();
-  }
-  return cached;
-}
-
 QColor defaultAccent() {
   return QColor(0x00, 0x78, 0xD7);
 }
@@ -468,7 +452,6 @@ void Windows10Style::applyPalette(bool accentChanged) {
   const QPalette palette = mergeCustomRoles(next, m_appliedPalette, QApplication::palette(), accentChanged);
   m_appliedPalette = next;
   QApplication::setPalette(palette);
-  QToolTip::setPalette(palette);
 }
 
 void Windows10Style::scheduleAnimationFrame(const QWidget* widget) const {
@@ -570,13 +553,121 @@ QPalette buildPalette(bool dark, const QColor& accent) {
   return palette;
 }
 
+const QPalette& basePalette(bool dark) {
+  static const QPalette light = buildPalette(false, defaultAccent());
+  static const QPalette darkPalette = buildPalette(true, defaultAccent());
+  return dark ? darkPalette : light;
+}
+
 // The style's own palette per theme: the baseline for telling which roles the
 // application or a widget overrides. Accent roles aren't compared, so the default
 // accent stands in for any.
 const QPalette& basePalette(const QStyleOption* option) {
-  static const QPalette light = buildPalette(false, defaultAccent());
-  static const QPalette dark = buildPalette(true, defaultAccent());
-  return isDarkPalette(option->palette) ? dark : light;
+  return basePalette(isDarkPalette(option->palette));
+}
+
+// Colors depend on the palette's theme, accent and neutrals; cache the last set, as one
+// widget tree rarely mixes them
+const Colors& colorsFor(const QStyleOption* option) {
+  static Colors cached;
+  static bool hasCache = false;
+  static bool cachedDark = false;
+  static QRgb cachedAccent = 0;
+  static QRgb cachedWindow = 0;
+  static QRgb cachedText = 0;
+  const QPalette& palette = option->palette;
+  const bool dark = isDarkPalette(palette);
+  const QRgb accent = palette.color(QPalette::Active, QPalette::Highlight).rgba();
+  const QRgb window = palette.color(QPalette::Active, QPalette::Window).rgba();
+  const QRgb text = palette.color(QPalette::Active, QPalette::WindowText).rgba();
+  if (hasCache && cachedDark == dark && cachedAccent == accent && cachedWindow == window && cachedText == text) {
+    return cached;
+  }
+  cached = dark ? makeDarkColors(QColor::fromRgba(accent)) : makeLightColors(QColor::fromRgba(accent));
+  // A palette with other window and text colors re-tints the theme's greys to match
+  const QPalette& standard = basePalette(dark);
+  if (!hasStandardNeutrals(palette, standard)) {
+    static QColor Colors::*const neutrals[] = {
+      &Colors::m_text,
+      &Colors::m_textDisabled,
+      &Colors::m_focusRect,
+      &Colors::m_buttonBorder,
+      &Colors::m_buttonHoverFill,
+      &Colors::m_buttonHoverBorder,
+      &Colors::m_buttonPressedFill,
+      &Colors::m_buttonPressedBorder,
+      &Colors::m_buttonDisabledBorder,
+      &Colors::m_buttonDisabledText,
+      &Colors::m_editBorder,
+      &Colors::m_editHoverBorder,
+      &Colors::m_editDisabledBorder,
+      &Colors::m_glyph,
+      &Colors::m_glyphDisabled,
+      &Colors::m_checkBorder,
+      &Colors::m_checkHover,
+      &Colors::m_checkPressed,
+      &Colors::m_checkPressedFill,
+      &Colors::m_checkDisabled,
+      &Colors::m_itemHover,
+      &Colors::m_itemSelected,
+      &Colors::m_itemSelectedBorder,
+      &Colors::m_itemInactive,
+      &Colors::m_scrollTrack,
+      &Colors::m_scrollThumb,
+      &Colors::m_scrollThumbHover,
+      &Colors::m_scrollThumbPressed,
+      &Colors::m_scrollArrow,
+      &Colors::m_scrollArrowHoverFill,
+      &Colors::m_scrollArrowHover,
+      &Colors::m_scrollArrowPressedFill,
+      &Colors::m_scrollArrowPressed,
+      &Colors::m_scrollArrowDisabled,
+      &Colors::m_trackFill,
+      &Colors::m_trackBorder,
+      &Colors::m_sliderThumbHover,
+      &Colors::m_sliderThumbPressed,
+      &Colors::m_sliderThumbDisabled,
+      &Colors::m_tick,
+      &Colors::m_progressFill,
+      &Colors::m_progressBorder,
+      &Colors::m_progressChunk,
+      &Colors::m_tabBorder,
+      &Colors::m_tabFill,
+      &Colors::m_tabSelectedFill,
+      &Colors::m_tabHoverFill,
+      &Colors::m_tabHoverBorder,
+      &Colors::m_groupBorder,
+      &Colors::m_viewBorder,
+      &Colors::m_popupBorder,
+      &Colors::m_separator,
+      &Colors::m_etchShadow,
+      &Colors::m_etchHighlight,
+      &Colors::m_menuFill,
+      &Colors::m_menuBorder,
+      &Colors::m_menuHot,
+      &Colors::m_menuHotDisabled,
+      &Colors::m_menuSeparator,
+      &Colors::m_menuBarFill,
+      &Colors::m_headerSeparator,
+      &Colors::m_headerHover,
+      &Colors::m_headerHoverBorder,
+      &Colors::m_headerPressed,
+      &Colors::m_headerPressedBorder,
+      &Colors::m_headerText,
+      &Colors::m_treeGlyph,
+      &Colors::m_treeGlyphHover,
+      &Colors::m_toolTipBorder,
+    };
+    for (QColor Colors::*neutral : neutrals) {
+      cached.*neutral = retint(cached.*neutral, standard, palette);
+    }
+  }
+  hasCache = true;
+  cachedDark = dark;
+  cachedAccent = accent;
+  cachedWindow = window;
+  cachedText = text;
+  return cached;
 }
 
 } // namespace
@@ -592,7 +683,21 @@ void Windows10Style::polish(QPalette& palette) {
 
 void Windows10Style::polish(QApplication* application) {
   QProxyStyle::polish(application);
-  QToolTip::setPalette(standardPalette());
+  // Tooltips keep a palette of their own; follow the application's from now on
+  QToolTip::setPalette(QApplication::palette());
+  application->installEventFilter(this);
+}
+
+void Windows10Style::unpolish(QApplication* application) {
+  application->removeEventFilter(this);
+  QProxyStyle::unpolish(application);
+}
+
+bool Windows10Style::eventFilter(QObject* watched, QEvent* event) {
+  if (event->type() == QEvent::ApplicationPaletteChange && watched == qApp) {
+    QToolTip::setPalette(QApplication::palette());
+  }
+  return QProxyStyle::eventFilter(watched, event);
 }
 
 void Windows10Style::polish(QWidget* widget) {
